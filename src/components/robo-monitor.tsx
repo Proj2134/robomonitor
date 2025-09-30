@@ -28,27 +28,12 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
 
 import { analyzeRobocopyLog, type AnalyzeRobocopyLogOutput } from "@/ai/flows/intelligent-alerting";
+import { runRobocopy } from "@/app/actions";
 
 type AlertMessage = AnalyzeRobocopyLogOutput['alerts'][0];
-
-// Simulation data to mimic robocopy behavior
-const fakeFiles = [
-  { name: "drivers/", type: "dir" },
-  { name: "drivers/network_card_v2.exe", size: 12.5, type: "file" },
-  { name: "drivers/gpu_drivers_latest.msi", size: 350.2, type: "file" },
-  { name: "assets/", type: "dir" },
-  { name: "assets/logo.png", size: 0.8, type: "file" },
-  { name: "assets/background.jpg", size: 2.1, type: "file" },
-  { name: "project_files/main_app.exe", size: 55.0, type: "file" },
-  { name: "project_files/readme.txt", size: 0.01, type: "file" },
-  { name: "project_files/config.json", size: 0.02, type: "file", error: "Access is denied" },
-  { name: "temp_files/", type: "dir" },
-  { name: "temp_files/temp_log.tmp", size: 1.5, type: "extra" },
-];
-
-const SIMULATION_DELAY = 300; // ms between each log line
 
 export function RoboMonitor() {
   const [source, setSource] = useState("\\\\10.255.14.149\\Desktop\\Softs");
@@ -61,6 +46,7 @@ export function RoboMonitor() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -70,71 +56,7 @@ export function RoboMonitor() {
       }
     }
   }, [logLines]);
-  
 
-  const generateLog = async () => {
-    let fullLog = `
--------------------------------------------------------------------------------
-   ROBOCOPY     ::     Robust File Copy for Windows                            
--------------------------------------------------------------------------------
-
-  Started : ${new Date().toString()}
-
-   Source : ${source}\\
-     Dest : ${destination}\\
-
-    Files : *.*
-    
-  Options : /E /V /R:3 /W:10 /LOG+:Robocopy_Log.txt /NP /ETA
-
-------------------------------------------------------------------------------
-
-`;
-    setLogLines(fullLog.trim().split('\n'));
-
-    for (let i = 0; i < fakeFiles.length; i++) {
-      const item = fakeFiles[i];
-      let logEntry = "";
-
-      await new Promise((resolve) => setTimeout(resolve, SIMULATION_DELAY));
-
-      if (item.type === "dir") {
-        logEntry = `\t*New Dir\t\t${source}\\${item.name}`;
-      } else if (item.type === 'file') {
-        setCurrentFile(item.name);
-        logEntry = `\tNew File\t\t${item.size} m\t${source}\\${item.name}`;
-        if(item.error) {
-            logEntry += `\n${new Date().toISOString().split('T')[0]} ${new Date().toTimeString().split(' ')[0]} ERROR 5 (0x00000005) Copying File ${source}\\${item.name}\n${item.error}.`
-        }
-      } else if (item.type === 'extra') {
-         logEntry = `\t*EXTRA File\t\t${item.size} m\t${destination}\\${item.name}`;
-      }
-      
-      const newProgress = Math.round(((i + 1) / fakeFiles.length) * 100);
-      setProgress(newProgress);
-      logEntry += `\n\t${newProgress}%`;
-
-      fullLog += logEntry + "\n";
-      setLogLines(currentLines => [...currentLines, ...logEntry.split('\n')]);
-    }
-
-    const summary = `
-------------------------------------------------------------------------------
-
-               Total    Copied   Skipped  Mismatch    FAILED    Extras
-    Dirs :         3         3         0         0         0         0
-   Files :         7         6         0         0         1         1
-   Bytes :   422.1 m   420.6 m         0         0     1.5 m   1.5 m
-   Times :   0:00:15   0:00:10                       0:00:00   0:00:05
-
-
-   Ended : ${new Date().toString()}
-`;
-    fullLog += summary;
-    setLogLines(fullLog.trim().split('\n'));
-    return fullLog;
-  }
-  
   const handleStartCopy = async () => {
     setIsCopying(true);
     setProgress(0);
@@ -142,14 +64,57 @@ export function RoboMonitor() {
     setCurrentFile("");
     setAlerts([]);
 
-    const finalLog = await generateLog();
+    let fullLog = "";
 
+    try {
+      const stream = await runRobocopy(source, destination);
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullLog += chunk;
+
+        // Process chunk to update UI elements
+        const lines = chunk.split('\n');
+        setLogLines(prev => [...prev, ...lines.filter(l => l)]);
+
+        // Example of parsing progress and current file
+        const progressLine = lines.find(l => l.includes('%'));
+        if (progressLine) {
+            const newProgress = parseInt(progressLine.trim().replace('%', ''));
+            if (!isNaN(newProgress)) {
+                setProgress(newProgress);
+            }
+        }
+        
+        const fileLine = lines.find(l => l.trim().startsWith('New File'));
+        if (fileLine) {
+            // This is a simplified parsing, a real implementation would be more robust
+            setCurrentFile(fileLine.split('\t').pop() || "...");
+        }
+      }
+    } catch (error: any) {
+        console.error("Robocopy execution failed:", error);
+        toast({
+            variant: "destructive",
+            title: "Execution Error",
+            description: "Failed to run robocopy script. Make sure it's installed and you are on a Windows machine.",
+        });
+        setIsCopying(false);
+        return;
+    }
+
+    setProgress(100);
     setCurrentFile("Completed.");
     setIsCopying(false);
     
     setIsAnalyzing(true);
     try {
-        const result = await analyzeRobocopyLog({ logContent: finalLog });
+        const result = await analyzeRobocopyLog({ logContent: fullLog });
         setAlerts(result.alerts);
     } catch (error) {
         console.error("AI analysis failed:", error);
@@ -292,3 +257,4 @@ export function RoboMonitor() {
     </div>
   );
 }
+
