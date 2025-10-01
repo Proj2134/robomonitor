@@ -22,10 +22,21 @@ function nodeToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream<Uint
   });
 }
 
-export async function runRobocopy(source: string, destination: string): Promise<ReadableStream<Uint8Array>> {
-  // Use /E (copy subdirectories), /V (verbose), /ETA (estimated time)
-  // Removed /NP to ensure progress percentage is displayed
-  const args = [source, destination, '/E', '/V', '/R:3', '/W:10', '/ETA'];
+export async function runRobocopy(source: string, destination: string, operation: 'copy' | 'move'): Promise<ReadableStream<Uint8Array>> {
+  
+  const baseArgs = [source, destination];
+  
+  if (operation === 'move') {
+    // /MOVE moves files AND directories (deletes from source after copy)
+    baseArgs.push('/MOVE');
+  } else {
+    // /E copies subdirectories, including empty ones
+    baseArgs.push('/E');
+  }
+
+  // /V (verbose), /ETA (estimated time), /R:3 (3 retries), /W:10 (10s wait between retries)
+  const commonArgs = ['/V', '/R:3', '/W:10', '/ETA'];
+  const args = [...baseArgs, ...commonArgs];
 
   const robocopyProcess = spawn('robocopy', args, { shell: true });
 
@@ -36,20 +47,16 @@ export async function runRobocopy(source: string, destination: string): Promise<
   
   robocopyProcess.on('error', (err) => {
     console.error("Spawn error:", err);
-    // This is handled by the promise rejection in the 'close' event
   });
   
-  // Robocopy uses non-zero exit codes to indicate success with nuances.
-  // Codes < 8 are generally considered success (files copied, extra files, etc.)
-  // We need to wait for the process to close to check the exit code.
   const exitPromise = new Promise<void>((resolve, reject) => {
     robocopyProcess.on('close', (code) => {
+      // Robocopy uses exit codes < 8 for success (e.g. files copied, extra files, etc.)
       if (code !== null && code < 8) {
         resolve();
       } else {
         const errorMessage = `Robocopy failed with exit code ${code}.\n\nSTDERR:\n${errorData}`;
         console.error(errorMessage);
-        // We reject here so the stream consumer knows there was a failure.
         reject(new Error("Failed to run robocopy script. Check server logs for details."));
       }
     });
@@ -57,22 +64,18 @@ export async function runRobocopy(source: string, destination: string): Promise<
 
   const stdoutWebStream = nodeToWebStream(robocopyProcess.stdout);
 
-  // We need a way to bubble up the exit code error to the stream reader.
-  // We'll create a new stream that waits for the process to finish.
   const reader = stdoutWebStream.getReader();
   return new ReadableStream({
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
         if (done) {
-          // stdout is finished, now wait for the process to close to check the exit code.
           await exitPromise;
           controller.close();
         } else {
           controller.enqueue(value);
         }
       } catch (error) {
-        // This will catch errors from the stdout stream itself
         controller.error(error);
       }
     },

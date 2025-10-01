@@ -8,6 +8,7 @@ import {
   Terminal,
   CircleCheck,
   Loader2,
+  Move,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 import { runRobocopy } from "@/app/actions";
 
@@ -31,6 +33,7 @@ import { runRobocopy } from "@/app/actions";
 export function RoboMonitor() {
   const [source, setSource] = useState("C:\\Users\\Default\\Documents");
   const [destination, setDestination] = useState("C:\\Temp\\Backup");
+  const [operation, setOperation] = useState<'copy' | 'move'>('copy');
   const [isCopying, setIsCopying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -52,14 +55,13 @@ export function RoboMonitor() {
     setIsCopying(true);
     setProgress(0);
     setLogLines([]);
-    setCurrentFile("Starting copy process...");
+    setCurrentFile(`Starting ${operation} process...`);
     
     try {
-      const stream = await runRobocopy(source, destination);
+      const stream = await runRobocopy(source, destination, operation);
       const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
       
       let lines: string[] = [];
-      let fullLog = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -67,34 +69,40 @@ export function RoboMonitor() {
           break;
         }
 
-        fullLog += value;
-        const newLines = value.split('\r\n');
+        const newLines = value.split(/(\r\n|\n|\r)/);
         
         newLines.forEach(line => {
           if (line.trim()) {
-            const isProgressLine = line.includes('%');
+            // Robocopy progress lines overwrite the previous line in the console.
+            // We'll simulate that by replacing the last progress line.
+            const isProgressLine = line.trim().endsWith('%');
             
             if (isProgressLine) {
-              const lastLineIsProgress = lines[lines.length - 1]?.includes('%');
-              if (lastLineIsProgress) {
-                lines[lines.length - 1] = line;
+              // Find the index of the last line that was a progress line
+              const lastProgressIndex = lines.slice().reverse().findIndex(l => l.trim().endsWith('%'));
+              if (lastProgressIndex !== -1) {
+                 // Replace the last progress line
+                 lines[lines.length - 1 - lastProgressIndex] = line.trim();
               } else {
-                lines.push(line);
+                 lines.push(line.trim());
               }
             } else {
-              lines.push(line);
+              lines.push(line.trim());
             }
             
-            const progressMatch = line.match(/\d+(\.\d+)?%/);
+            // Extract percentage for the progress bar
+            const progressMatch = line.match(/(\d{1,2}(?:\.\d{1,2})?%)/);
             if (progressMatch && progressMatch[0]) {
               const percent = parseFloat(progressMatch[0].replace('%','').trim());
               setProgress(percent);
             }
 
-            const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d+%\s*)?(.+)/);
+            // Extract current file path
+            const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d+%\s*)?(?:\s{2,})(.+)/);
             if(fileMatch && fileMatch[1]){
                 const potentialFile = fileMatch[1].trim();
-                if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile) && !potentialFile.match(/^(Log File|Started|Source|Dest|Files|Options)/) ) {
+                // Filter out non-file lines
+                if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile) && !potentialFile.match(/^(Log File|Started|Source|Dest|Files|Options|Ended)/) ) {
                     setCurrentFile(potentialFile);
                 }
             }
@@ -109,7 +117,7 @@ export function RoboMonitor() {
         toast({
             variant: "destructive",
             title: "Robocopy Error",
-            description: error.message || "An unexpected error occurred during the copy.",
+            description: error.message || "An unexpected error occurred during the process.",
         });
         setIsCopying(false);
         setLogLines(prev => [...prev, error.message || "An unexpected error occurred."]);
@@ -130,9 +138,31 @@ export function RoboMonitor() {
               <Copy className="text-primary" />
               Robocopy Job
             </CardTitle>
-            <CardDescription>Configure and initiate a new file copy job.</CardDescription>
+            <CardDescription>Configure and initiate a new file transfer job.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-6">
+            <div className="space-y-2">
+                <Label>Operation Type</Label>
+                <RadioGroup
+                    value={operation}
+                    onValueChange={(value: 'copy' | 'move') => setOperation(value)}
+                    className="flex space-x-4"
+                    disabled={isCopying}
+                >
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="copy" id="r-copy" />
+                        <Label htmlFor="r-copy" className="flex items-center gap-2 cursor-pointer">
+                            <Copy className="h-4 w-4" /> Copy
+                        </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="move" id="r-move" />
+                        <Label htmlFor="r-move" className="flex items-center gap-2 cursor-pointer">
+                            <Move className="h-4 w-4" /> Move
+                        </Label>
+                    </div>
+                </RadioGroup>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="source" className="flex items-center gap-2">
                 <Folder className="h-4 w-4 text-muted-foreground" /> Source Path
@@ -148,8 +178,8 @@ export function RoboMonitor() {
           </CardContent>
           <CardFooter>
             <Button className="w-full font-semibold" onClick={handleStartCopy} disabled={isCopying}>
-              {isCopying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Copy className="mr-2 h-4 w-4" />}
-              {isCopying ? "Copying..." : "Start Copy"}
+              {isCopying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (operation === 'copy' ? <Copy className="mr-2 h-4 w-4" /> : <Move className="mr-2 h-4 w-4" />)}
+              {isCopying ? `${operation === 'copy' ? 'Copying' : 'Moving'}...` : `Start ${operation === 'copy' ? 'Copy' : 'Move'}`}
             </Button>
           </CardFooter>
         </Card>
@@ -178,7 +208,7 @@ export function RoboMonitor() {
                 {!isCopying && progress === 100 && (
                     <div className="mt-4 flex items-center text-sm text-accent">
                         <CircleCheck className="h-4 w-4 mr-2 shrink-0" />
-                        <span className="font-semibold">Copy operation completed successfully.</span>
+                        <span className="font-semibold">Operation completed successfully.</span>
                     </div>
                 )}
             </CardContent>
