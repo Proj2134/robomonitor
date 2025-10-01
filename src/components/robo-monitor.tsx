@@ -31,71 +31,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 
 import { analyzeRobocopyLog, type AnalyzeRobocopyLogOutput } from "@/ai/flows/intelligent-alerting";
+import { runRobocopy } from "@/app/actions";
+
 
 type AlertMessage = AnalyzeRobocopyLogOutput['alerts'][0];
 
-// --- Simulation Logic ---
-const FAKE_FILES = [
-    "system/drivers/ntfs.sys",
-    "system/drivers/tcpip.sys",
-    "documents/quarterly_report_q3.docx",
-    "documents/project_alpha/gantt_chart.xlsx",
-    "videos/family_vacation_2023.mp4",
-    "videos/archive/conference_talk.mov",
-    "source/app/main.py",
-    "source/app/utils/helpers.py",
-    "source/app/tests/test_main.py",
-    "backups/db_backup_2023_10_26.sql",
-    "design/assets/logo_final.svg",
-    "design/assets/icon_set/user.svg",
-    "design/assets/icon_set/settings.svg",
-    "temp/some_random_file.tmp",
-    "temp/another_file.log"
-];
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-async function* generateLog(source: string, destination: string) {
-    yield `-------------------------------------------------------------------------------
-   ROBOCOPY     ::     Robust File Copy for Windows
--------------------------------------------------------------------------------
-
-  Started : ${new Date().toString()}
-
-   Source : ${source}
-     Dest : ${destination}
-
-    Files : *.*
-
-  Options : *.* /S /E /V /R:3 /W:10 /NP /ETA
-
-------------------------------------------------------------------------------`;
-
-    for (let i = 0; i < FAKE_FILES.length; i++) {
-        const file = FAKE_FILES[i];
-        const progress = Math.round(((i + 1) / FAKE_FILES.length) * 100);
-        yield `\t*EXTRA File\t\t      1.2 m\t${file.replace(/\//g, '\\')}`;
-        await sleep(150);
-        yield `\t\t${progress}%`; // This simulates the percentage update line
-    }
-
-    yield `
-------------------------------------------------------------------------------
-
-               Total    Copied   Skipped  Mismatch    FAILED    Extras
-    Dirs :         5         5         0         0         0         0
-   Files :        15        15         0         0         0         0
-   Bytes :   145.3 m   145.3 m         0         0         0         0
-   Times :   0:00:05   0:00:02                       0:00:00   0:00:02
-
-   Ended : ${new Date().toString()}`;
-}
-// --- End Simulation Logic ---
-
-
 export function RoboMonitor() {
-  const [source, setSource] = useState("\\\\SERVER01\\Share\\Softs");
-  const [destination, setDestination] = useState("D:\\Backups\\Software");
+  const [source, setSource] = useState("C:\\Users\\Default\\Documents");
+  const [destination, setDestination] = useState("C:\\Temp\\Backup");
   const [isCopying, setIsCopying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -121,37 +64,35 @@ export function RoboMonitor() {
     setLogLines([]);
     setCurrentFile("Starting copy process...");
     setAlerts([]);
-
-    let fullLog = "";
     
+    let fullLog = "";
     try {
-        const logGenerator = generateLog(source, destination);
-        for await (const line of logGenerator) {
-            
-            const progressMatch = line.match(/^\s*(\d+)%$/);
-            if (progressMatch) {
-                const newProgress = parseInt(progressMatch[1], 10);
-                setProgress(newProgress);
-            } else {
-                 const fileMatch = line.match(/\t(.*)$/);
-                 if (fileMatch && !fileMatch[1].includes('%')) {
-                    setCurrentFile(fileMatch[1].trim());
-                 }
-                setLogLines(prev => [...prev, line]);
-                fullLog += line + '\n';
-            }
+      fullLog = await runRobocopy(source, destination);
+      
+      const lines = fullLog.split('\n');
+      setLogLines(lines);
+
+      // Simple progress simulation based on log lines appearing
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const fileMatch = line.trim().match(/^(?:\d{1,2}\.\d%\\t)?(.+)/);
+        if (fileMatch && fileMatch[1]) {
+           setCurrentFile(fileMatch[1].trim());
         }
+        setProgress(Math.round(((i + 1) / lines.length) * 100));
+      }
+
     } catch (error: any) {
-        console.error("Simulation failed:", error);
+        console.error("Robocopy execution failed:", error);
         toast({
             variant: "destructive",
-            title: "Simulation Error",
-            description: "An unexpected error occurred during the simulation.",
+            title: "Robocopy Error",
+            description: error.message || "An unexpected error occurred during the copy.",
         });
         setIsCopying(false);
+        setLogLines([error.message || "An unexpected error occurred."]);
         return;
     }
-
 
     setProgress(100);
     setCurrentFile("Completed.");
@@ -198,13 +139,13 @@ export function RoboMonitor() {
               <Label htmlFor="source" className="flex items-center gap-2">
                 <Folder className="h-4 w-4 text-muted-foreground" /> Source Path
               </Label>
-              <Input id="source" value={source} onChange={e => setSource(e.target.value)} disabled={isCopying} />
+              <Input id="source" value={source} onChange={e => setSource(e.target.value)} disabled={isCopying} placeholder="e.g. C:\\Users\\YourUser\\Documents"/>
             </div>
             <div className="space-y-2">
               <Label htmlFor="destination" className="flex items-center gap-2">
                 <Server className="h-4 w-4 text-muted-foreground" /> Destination Path
               </Label>
-              <Input id="destination" value={destination} onChange={e => setDestination(e.target.value)} disabled={isCopying} />
+              <Input id="destination" value={destination} onChange={e => setDestination(e.target.value)} disabled={isCopying} placeholder="e.g. D:\\Backups\\Docs" />
             </div>
           </CardContent>
           <CardFooter>
@@ -264,7 +205,7 @@ export function RoboMonitor() {
                 </div>
                 {isCopying && currentFile && (
                     <div className="mt-4 flex items-center text-sm">
-                        <FileIcon className="h-4 w-4 mr-2 shrink-0 text-primary" />
+                        <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin text-primary" />
                         <span className="font-mono text-muted-foreground truncate">
                            {currentFile}
                         </span>
