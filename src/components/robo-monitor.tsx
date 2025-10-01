@@ -4,14 +4,10 @@ import { useState, useRef, useEffect } from "react";
 import {
   Copy,
   Folder,
-  File as FileIcon,
   Server,
   Terminal,
-  AlertTriangle,
   CircleCheck,
-  Info,
   Loader2,
-  Sparkles,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,14 +23,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 
-import { analyzeRobocopyLog, type AnalyzeRobocopyLogOutput } from "@/ai/flows/intelligent-alerting";
 import { runRobocopy } from "@/app/actions";
 
-
-type AlertMessage = AnalyzeRobocopyLogOutput['alerts'][0];
 
 export function RoboMonitor() {
   const [source, setSource] = useState("C:\\Users\\Default\\Documents");
@@ -43,8 +35,6 @@ export function RoboMonitor() {
   const [progress, setProgress] = useState(0);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [currentFile, setCurrentFile] = useState("");
-  const [alerts, setAlerts] = useState<AlertMessage[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const logContainerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -63,14 +53,13 @@ export function RoboMonitor() {
     setProgress(0);
     setLogLines([]);
     setCurrentFile("Starting copy process...");
-    setAlerts([]);
     
-    let fullLog = "";
     try {
       const stream = await runRobocopy(source, destination);
       const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
       
       let lines: string[] = [];
+      let fullLog = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -83,14 +72,11 @@ export function RoboMonitor() {
         
         newLines.forEach(line => {
           if (line.trim()) {
-            // Robocopy's /ETA flag uses carriage returns to update the same line.
-            // We need to handle this to show smooth progress.
             const isProgressLine = line.includes('%');
             
             if (isProgressLine) {
               const lastLineIsProgress = lines[lines.length - 1]?.includes('%');
               if (lastLineIsProgress) {
-                // Replace the last line if it was also a progress update
                 lines[lines.length - 1] = line;
               } else {
                 lines.push(line);
@@ -99,18 +85,15 @@ export function RoboMonitor() {
               lines.push(line);
             }
             
-            // Regex for progress: extracts the number before the %
-            const progressMatch = line.match(/\d+\.\d+\s?%/);
+            const progressMatch = line.match(/\d+(\.\d+)?%/);
             if (progressMatch && progressMatch[0]) {
               const percent = parseFloat(progressMatch[0].replace('%','').trim());
               setProgress(percent);
             }
 
-            // Regex for file: finds lines that look like file paths
-            const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d%\s*)?(.+)/);
+            const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d+%\s*)?(.+)/);
             if(fileMatch && fileMatch[1]){
                 const potentialFile = fileMatch[1].trim();
-                // Avoid setting directories or summary lines as the current file
                 if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile) && !potentialFile.match(/^(Log File|Started|Source|Dest|Files|Options)/) ) {
                     setCurrentFile(potentialFile);
                 }
@@ -136,30 +119,6 @@ export function RoboMonitor() {
     setProgress(100);
     setCurrentFile("Completed.");
     setIsCopying(false);
-    
-    setIsAnalyzing(true);
-    try {
-        const result = await analyzeRobocopyLog({ logContent: fullLog });
-        setAlerts(result.alerts);
-    } catch (error) {
-        console.error("AI analysis failed:", error);
-        setAlerts([{ severity: 'error', message: 'Failed to analyze log file.' }]);
-    }
-    setIsAnalyzing(false);
-  };
-  
-  const getAlertIcon = (severity: AlertMessage['severity']) => {
-    const iconProps = { className: "h-5 w-5" };
-    switch (severity) {
-      case 'error':
-        return <AlertTriangle {...iconProps} />;
-      case 'warning':
-        return <Info {...iconProps} />;
-      case 'info':
-        return <CircleCheck {...iconProps} />;
-      default:
-        return <Info {...iconProps} />;
-    }
   };
 
   return (
@@ -193,45 +152,6 @@ export function RoboMonitor() {
               {isCopying ? "Copying..." : "Start Copy"}
             </Button>
           </CardFooter>
-        </Card>
-
-        <Card className="shadow-lg">
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2 font-headline">
-                    <Sparkles className="text-primary" />
-                    Intelligent Alerts
-                </CardTitle>
-                <CardDescription>AI-powered analysis of the copy log.</CardDescription>
-            </CardHeader>
-            <CardContent>
-                {isAnalyzing && (
-                    <div className="flex items-center justify-center p-4">
-                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                        <span className="text-muted-foreground">Analyzing log...</span>
-                    </div>
-                )}
-                {!isAnalyzing && alerts.length === 0 && (logLines.length === 0 || progress !== 100) &&(
-                    <div className="text-center text-sm text-muted-foreground p-4">
-                        No alerts to show. Run a job to analyze its log.
-                    </div>
-                )}
-                {!isCopying && progress === 100 && alerts.length === 0 && (
-                     <div className="text-center text-sm text-muted-foreground p-4">
-                        Analysis complete. No significant issues found.
-                    </div>
-                )}
-                <div className="space-y-3">
-                    {alerts.map((alert, index) => (
-                        <Alert key={index} variant={alert.severity === 'error' ? 'destructive' : 'default'} className="flex items-start gap-3">
-                            {getAlertIcon(alert.severity)}
-                            <div className="flex-1">
-                                <AlertTitle className="capitalize font-semibold">{alert.severity}</AlertTitle>
-                                <AlertDescription>{alert.message}</AlertDescription>
-                            </div>
-                        </Alert>
-                    ))}
-                </div>
-            </CardContent>
         </Card>
       </div>
       
