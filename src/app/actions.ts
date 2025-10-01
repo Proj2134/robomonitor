@@ -3,18 +3,18 @@
 import { spawn } from 'child_process';
 import { Readable } from 'stream';
 
-// A simple stream to wrap the Node.js process output
-function iteratorToStream(iterator: any) {
-  return new Readable({
-    async read() {
-      const { value, done } = await iterator.next()
-      if (done) {
-        this.push(null);
-      } else {
-        this.push(value);
-      }
-    },
-  });
+// This function converts a Node.js Readable stream to a Web ReadableStream.
+function nodeToWebStream(nodeStream: Readable): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+        start(controller) {
+            nodeStream.on('data', (chunk) => controller.enqueue(chunk));
+            nodeStream.on('end', () => controller.close());
+            nodeStream.on('error', (err) => controller.error(err));
+        },
+        cancel() {
+            nodeStream.destroy();
+        }
+    });
 }
 
 export async function runRobocopy(source: string, destination: string): Promise<ReadableStream<string>> {
@@ -36,27 +36,15 @@ export async function runRobocopy(source: string, destination: string): Promise<
     shell: true,
   });
 
-  const iterator = (async function*() {
-    // A new line may not be a complete line, so we buffer it
-    let buffer = '';
-    for await (const chunk of proc.stdout) {
-      buffer += chunk.toString();
-      // Robocopy output seems to use \r\n, but we'll handle \n too
-      const lines = buffer.split(/\r\n|\n/);
-      // The last element might be a partial line, so we keep it in the buffer
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        yield line + '\n';
-      }
-    }
-    // Yield any remaining data in the buffer
-    if (buffer.length > 0) {
-      yield buffer;
-    }
-  })();
-  
-  const nodeStream = iteratorToStream(iterator);
-  const webStream = nodeStream.pipe(new TextEncoderStream());
+  // Robocopy outputs data to stdout. We can use this stream.
+  // We need to handle the encoding from the process.
+  proc.stdout.setEncoding('utf8');
 
-  return webStream;
+  // Convert the Node.js stream from the process to a Web Stream
+  const webStream = nodeToWebStream(proc.stdout);
+
+  // We need to decode the text from the stream of Uint8Array chunks.
+  const textStream = webStream.pipeThrough(new TextDecoderStream());
+
+  return textStream;
 }
