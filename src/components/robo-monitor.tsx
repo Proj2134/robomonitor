@@ -31,13 +31,71 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 
 import { analyzeRobocopyLog, type AnalyzeRobocopyLogOutput } from "@/ai/flows/intelligent-alerting";
-import { runRobocopy } from "@/app/actions";
 
 type AlertMessage = AnalyzeRobocopyLogOutput['alerts'][0];
 
+// --- Simulation Logic ---
+const FAKE_FILES = [
+    "system/drivers/ntfs.sys",
+    "system/drivers/tcpip.sys",
+    "documents/quarterly_report_q3.docx",
+    "documents/project_alpha/gantt_chart.xlsx",
+    "videos/family_vacation_2023.mp4",
+    "videos/archive/conference_talk.mov",
+    "source/app/main.py",
+    "source/app/utils/helpers.py",
+    "source/app/tests/test_main.py",
+    "backups/db_backup_2023_10_26.sql",
+    "design/assets/logo_final.svg",
+    "design/assets/icon_set/user.svg",
+    "design/assets/icon_set/settings.svg",
+    "temp/some_random_file.tmp",
+    "temp/another_file.log"
+];
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function* generateLog(source: string, destination: string) {
+    yield `-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows
+-------------------------------------------------------------------------------
+
+  Started : ${new Date().toString()}
+
+   Source : ${source}
+     Dest : ${destination}
+
+    Files : *.*
+
+  Options : *.* /S /E /V /R:3 /W:10 /NP /ETA
+
+------------------------------------------------------------------------------`;
+
+    for (let i = 0; i < FAKE_FILES.length; i++) {
+        const file = FAKE_FILES[i];
+        const progress = Math.round(((i + 1) / FAKE_FILES.length) * 100);
+        yield `\t*EXTRA File\t\t      1.2 m\t${file.replace(/\//g, '\\')}`;
+        await sleep(150);
+        yield `\t\t${progress}%`; // This simulates the percentage update line
+    }
+
+    yield `
+------------------------------------------------------------------------------
+
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Dirs :         5         5         0         0         0         0
+   Files :        15        15         0         0         0         0
+   Bytes :   145.3 m   145.3 m         0         0         0         0
+   Times :   0:00:05   0:00:02                       0:00:00   0:00:02
+
+   Ended : ${new Date().toString()}`;
+}
+// --- End Simulation Logic ---
+
+
 export function RoboMonitor() {
-  const [source, setSource] = useState("\\\\10.255.14.149\\Desktop\\Softs");
-  const [destination, setDestination] = useState("C:\\Users\\106780\\Desktop\\testing");
+  const [source, setSource] = useState("\\\\SERVER01\\Share\\Softs");
+  const [destination, setDestination] = useState("D:\\Backups\\Software");
   const [isCopying, setIsCopying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -65,22 +123,35 @@ export function RoboMonitor() {
     setAlerts([]);
 
     let fullLog = "";
-
+    
     try {
-      fullLog = await runRobocopy(source, destination);
-      setLogLines(fullLog.split('\n'));
+        const logGenerator = generateLog(source, destination);
+        for await (const line of logGenerator) {
+            
+            const progressMatch = line.match(/^\s*(\d+)%$/);
+            if (progressMatch) {
+                const newProgress = parseInt(progressMatch[1], 10);
+                setProgress(newProgress);
+            } else {
+                 const fileMatch = line.match(/\t(.*)$/);
+                 if (fileMatch && !fileMatch[1].includes('%')) {
+                    setCurrentFile(fileMatch[1].trim());
+                 }
+                setLogLines(prev => [...prev, line]);
+                fullLog += line + '\n';
+            }
+        }
     } catch (error: any) {
-        console.error("Robocopy execution failed:", error);
+        console.error("Simulation failed:", error);
         toast({
             variant: "destructive",
-            title: "Execution Error",
-            description: error.message || "Failed to run robocopy script. Make sure it's installed and you are on a Windows machine.",
+            title: "Simulation Error",
+            description: "An unexpected error occurred during the simulation.",
         });
         setIsCopying(false);
-        setProgress(0);
-        setCurrentFile("");
         return;
     }
+
 
     setProgress(100);
     setCurrentFile("Completed.");
