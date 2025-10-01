@@ -67,19 +67,59 @@ export function RoboMonitor() {
     
     let fullLog = "";
     try {
-      fullLog = await runRobocopy(source, destination);
+      const stream = await runRobocopy(source, destination);
+      const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
       
-      const lines = fullLog.split('\n');
-      setLogLines(lines);
+      let lines: string[] = [];
+      let totalFiles = 0;
+      let filesCopied = 0;
 
-      // Simple progress simulation based on log lines appearing
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const fileMatch = line.trim().match(/^(?:\d{1,2}\.\d%\\t)?(.+)/);
-        if (fileMatch && fileMatch[1]) {
-           setCurrentFile(fileMatch[1].trim());
+      // First pass to get total number of files from the header
+      let headerFinished = false;
+      const tempReader = (await runRobocopy(source, destination)).pipeThrough(new TextDecoderStream()).getReader();
+      let logForCounting = '';
+      while (true) {
+        const { done, value } = await tempReader.read();
+        if (done) break;
+        logForCounting += value;
+      }
+      const filesMatch = logForCounting.match(/Total\s+Files\s+:\s+(\d+)/);
+      if (filesMatch && filesMatch[1]) {
+        totalFiles = parseInt(filesMatch[1], 10);
+      }
+
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
         }
-        setProgress(Math.round(((i + 1) / lines.length) * 100));
+
+        fullLog += value;
+        const newLines = value.split('\n');
+        
+        newLines.forEach(line => {
+          if (line.trim()) {
+            lines.push(line);
+            
+            // Regex to find a file path in a robocopy log line
+            const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d%\s*)?(.+)/);
+            if(fileMatch && fileMatch[1]){
+                const potentialFile = fileMatch[1].trim();
+                // Avoid setting directories or summary lines as the current file
+                if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile)) {
+                    setCurrentFile(potentialFile);
+                    filesCopied++;
+                }
+            }
+          }
+        });
+        
+        setLogLines([...lines]);
+
+        if (totalFiles > 0) {
+            setProgress(Math.round((filesCopied / totalFiles) * 100));
+        }
       }
 
     } catch (error: any) {
@@ -90,7 +130,7 @@ export function RoboMonitor() {
             description: error.message || "An unexpected error occurred during the copy.",
         });
         setIsCopying(false);
-        setLogLines([error.message || "An unexpected error occurred."]);
+        setLogLines(prev => [...prev, error.message || "An unexpected error occurred."]);
         return;
     }
 

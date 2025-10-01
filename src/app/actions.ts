@@ -2,48 +2,81 @@
 
 import { spawn } from 'child_process';
 
-export async function runRobocopy(source: string, destination: string): Promise<string> {
-  // These arguments are chosen for verbose logging, which is good for monitoring.
-  // /E :: copy subdirectories, including Empty ones.
-  // /V :: produce Verbose output, showing skipped files.
-  // /R:3 :: Retry 3 times on failed copies.
-  // /W:10 :: Wait 10 seconds between retries.
-  // /NP :: No Progress - don't display % copied.
-  // /ETA :: show Estimated Time of Arrival of copied files.
+// Helper to convert Node.js stream to a Web ReadableStream
+function nodeToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      nodeStream.on('data', (chunk) => {
+        controller.enqueue(new Uint8Array(chunk));
+      });
+      nodeStream.on('end', () => {
+        controller.close();
+      });
+      nodeStream.on('error', (err) => {
+        controller.error(err);
+      });
+    },
+    cancel() {
+      nodeStream.destroy();
+    },
+  });
+}
+
+export async function runRobocopy(source: string, destination: string): Promise<ReadableStream<Uint8Array>> {
   const args = [source, destination, '/E', '/V', '/R:3', '/W:10', '/NP', '/ETA'];
 
-  return new Promise((resolve, reject) => {
-    // Using { shell: true } is important on Windows to ensure system commands can be found.
-    const robocopyProcess = spawn('robocopy', args, { shell: true });
+  const robocopyProcess = spawn('robocopy', args, { shell: true });
 
-    let stdout = '';
-    let stderr = '';
-
-    robocopyProcess.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    robocopyProcess.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
+  let errorData = '';
+  robocopyProcess.stderr.on('data', (data) => {
+    errorData += data.toString();
+  });
+  
+  robocopyProcess.on('error', (err) => {
+    console.error("Spawn error:", err);
+    // This is handled by the promise rejection in the 'close' event
+  });
+  
+  // Robocopy uses non-zero exit codes to indicate success with nuances.
+  // Codes < 8 are generally considered success (files copied, extra files, etc.)
+  // We need to wait for the process to close to check the exit code.
+  const exitPromise = new Promise<void>((resolve, reject) => {
     robocopyProcess.on('close', (code) => {
-      // Robocopy has several "success" exit codes.
-      // Codes 0-7 indicate success (e.g., files were copied, no errors).
-      // We will treat anything less than 8 as a success.
       if (code !== null && code < 8) {
-        resolve(stdout);
+        resolve();
       } else {
-        // Robocopy often outputs informational text to stderr, so we combine them for better debugging.
-        const errorMessage = `Robocopy failed with exit code ${code}.\n\nSTDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`;
+        const errorMessage = `Robocopy failed with exit code ${code}.\n\nSTDERR:\n${errorData}`;
         console.error(errorMessage);
+        // We reject here so the stream consumer knows there was a failure.
         reject(new Error("Failed to run robocopy script. Check server logs for details."));
       }
     });
+  });
 
-    robocopyProcess.on('error', (err) => {
-      console.error("Spawn error:", err);
-      reject(new Error("Failed to run robocopy script. Make sure it's installed and you're on a Windows machine."));
-    });
+  const stdoutWebStream = nodeToWebStream(robocopyProcess.stdout);
+
+  // We need a way to bubble up the exit code error to the stream reader.
+  // We'll create a new stream that waits for the process to finish.
+  const reader = stdoutWebStream.getReader();
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          // stdout is finished, now wait for the process to close to check the exit code.
+          await exitPromise;
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        // This will catch errors from the stdout stream itself
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      reader.cancel(reason);
+      robocopyProcess.kill();
+    }
   });
 }
