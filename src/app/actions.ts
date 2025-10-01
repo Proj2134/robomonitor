@@ -1,7 +1,7 @@
 'use server';
 
 import { spawn } from 'child_process';
-import { Readable } from 'stream';
+import type { Readable } from 'stream';
 
 // This function converts a Node.js Readable stream to a Web ReadableStream.
 function nodeToWebStream(nodeStream: Readable): ReadableStream<Uint8Array> {
