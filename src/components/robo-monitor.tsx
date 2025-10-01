@@ -61,50 +61,24 @@ export function RoboMonitor() {
     setIsCopying(true);
     setProgress(0);
     setLogLines([]);
-    setCurrentFile("");
+    setCurrentFile("Starting copy process...");
     setAlerts([]);
 
     let fullLog = "";
 
     try {
-      const stream = await runRobocopy(source, destination);
-      const reader = stream.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        fullLog += chunk;
-
-        // Process chunk to update UI elements
-        const lines = chunk.split('\n');
-        setLogLines(prev => [...prev, ...lines.filter(l => l)]);
-
-        // Example of parsing progress and current file
-        const progressLine = lines.find(l => l.includes('%'));
-        if (progressLine) {
-            const newProgress = parseInt(progressLine.trim().replace('%', ''));
-            if (!isNaN(newProgress)) {
-                setProgress(newProgress);
-            }
-        }
-        
-        const fileLine = lines.find(l => l.trim().startsWith('New File'));
-        if (fileLine) {
-            // This is a simplified parsing, a real implementation would be more robust
-            setCurrentFile(fileLine.split('\t').pop() || "...");
-        }
-      }
+      fullLog = await runRobocopy(source, destination);
+      setLogLines(fullLog.split('\n'));
     } catch (error: any) {
         console.error("Robocopy execution failed:", error);
         toast({
             variant: "destructive",
             title: "Execution Error",
-            description: "Failed to run robocopy script. Make sure it's installed and you are on a Windows machine.",
+            description: error.message || "Failed to run robocopy script. Make sure it's installed and you are on a Windows machine.",
         });
         setIsCopying(false);
+        setProgress(0);
+        setCurrentFile("");
         return;
     }
 
@@ -185,7 +159,7 @@ export function RoboMonitor() {
                         <span className="text-muted-foreground">Analyzing log...</span>
                     </div>
                 )}
-                {!isAnalyzing && alerts.length === 0 && !isCopying && (
+                {!isAnalyzing && alerts.length === 0 && (logLines.length === 0 || progress !== 100) &&(
                     <div className="text-center text-sm text-muted-foreground p-4">
                         No alerts to show. Run a job to analyze its log.
                     </div>
@@ -257,4 +231,3 @@ export function RoboMonitor() {
     </div>
   );
 }
-
