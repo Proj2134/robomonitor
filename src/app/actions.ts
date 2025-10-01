@@ -55,8 +55,8 @@ export async function runRobocopy(source: string, destination: string): Promise<
     }
   })();
   
-  const stream = iteratorToStream(iterator).pipe(new TextEncoderStream());
+  const nodeStream = iteratorToStream(iterator);
+  const webStream = nodeStream.pipe(new TextEncoderStream());
 
-  return stream;
+  return webStream;
 }
-
