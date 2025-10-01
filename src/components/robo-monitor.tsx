@@ -71,23 +71,6 @@ export function RoboMonitor() {
       const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
       
       let lines: string[] = [];
-      let totalFiles = 0;
-      let filesCopied = 0;
-
-      // First pass to get total number of files from the header
-      let headerFinished = false;
-      const tempReader = (await runRobocopy(source, destination)).pipeThrough(new TextDecoderStream()).getReader();
-      let logForCounting = '';
-      while (true) {
-        const { done, value } = await tempReader.read();
-        if (done) break;
-        logForCounting += value;
-      }
-      const filesMatch = logForCounting.match(/Total\s+Files\s+:\s+(\d+)/);
-      if (filesMatch && filesMatch[1]) {
-        totalFiles = parseInt(filesMatch[1], 10);
-      }
-
 
       while (true) {
         const { done, value } = await reader.read();
@@ -96,30 +79,46 @@ export function RoboMonitor() {
         }
 
         fullLog += value;
-        const newLines = value.split('\n');
+        const newLines = value.split('\r\n');
         
         newLines.forEach(line => {
           if (line.trim()) {
-            lines.push(line);
+            // Robocopy's /ETA flag uses carriage returns to update the same line.
+            // We need to handle this to show smooth progress.
+            const isProgressLine = line.includes('%');
             
-            // Regex to find a file path in a robocopy log line
+            if (isProgressLine) {
+              const lastLineIsProgress = lines[lines.length - 1]?.includes('%');
+              if (lastLineIsProgress) {
+                // Replace the last line if it was also a progress update
+                lines[lines.length - 1] = line;
+              } else {
+                lines.push(line);
+              }
+            } else {
+              lines.push(line);
+            }
+            
+            // Regex for progress: extracts the number before the %
+            const progressMatch = line.match(/\d+\.\d+\s?%/);
+            if (progressMatch && progressMatch[0]) {
+              const percent = parseFloat(progressMatch[0].replace('%','').trim());
+              setProgress(percent);
+            }
+
+            // Regex for file: finds lines that look like file paths
             const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d%\s*)?(.+)/);
             if(fileMatch && fileMatch[1]){
                 const potentialFile = fileMatch[1].trim();
                 // Avoid setting directories or summary lines as the current file
-                if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile)) {
+                if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile) && !potentialFile.match(/^(Log File|Started|Source|Dest|Files|Options)/) ) {
                     setCurrentFile(potentialFile);
-                    filesCopied++;
                 }
             }
           }
         });
         
         setLogLines([...lines]);
-
-        if (totalFiles > 0) {
-            setProgress(Math.round((filesCopied / totalFiles) * 100));
-        }
       }
 
     } catch (error: any) {
@@ -216,6 +215,11 @@ export function RoboMonitor() {
                         No alerts to show. Run a job to analyze its log.
                     </div>
                 )}
+                {!isCopying && progress === 100 && alerts.length === 0 && (
+                     <div className="text-center text-sm text-muted-foreground p-4">
+                        Analysis complete. No significant issues found.
+                    </div>
+                )}
                 <div className="space-y-3">
                     {alerts.map((alert, index) => (
                         <Alert key={index} variant={alert.severity === 'error' ? 'destructive' : 'default'} className="flex items-start gap-3">
@@ -241,7 +245,7 @@ export function RoboMonitor() {
                 <Progress value={progress} className="w-full mb-2 h-3" />
                 <div className="flex justify-between text-sm text-muted-foreground">
                     <span>Overall Progress</span>
-                    <span className="font-semibold">{progress}%</span>
+                    <span className="font-semibold">{progress.toFixed(2)}%</span>
                 </div>
                 {isCopying && currentFile && (
                     <div className="mt-4 flex items-center text-sm">

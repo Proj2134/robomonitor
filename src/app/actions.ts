@@ -23,7 +23,9 @@ function nodeToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream<Uint
 }
 
 export async function runRobocopy(source: string, destination: string): Promise<ReadableStream<Uint8Array>> {
-  const args = [source, destination, '/E', '/V', '/R:3', '/W:10', '/NP', '/ETA'];
+  // Use /E (copy subdirectories), /V (verbose), /ETA (estimated time)
+  // Removed /NP to ensure progress percentage is displayed
+  const args = [source, destination, '/E', '/V', '/R:3', '/W:10', '/ETA'];
 
   const robocopyProcess = spawn('robocopy', args, { shell: true });
 
