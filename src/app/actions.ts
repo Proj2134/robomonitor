@@ -70,17 +70,18 @@ export async function runRobocopy(source: string, destination: string, operation
   }
   
   if (operation === 'move') {
-    // /MOVE moves files AND directories (deletes from source after copy)
-    baseArgs.push('/MOVE');
-  } else {
-    // /E copies subdirectories, including empty ones. Only add if we're not copying a single file.
-    if (scope !== 'latest') {
-      baseArgs.push('/E');
-    }
+    // /MOV moves files (deletes from source after copy)
+    baseArgs.push('/MOV');
+  } 
+  
+  // /E copies subdirectories, including empty ones. Add for all 'all' scope jobs.
+  if (scope === 'all') {
+    baseArgs.push('/E');
   }
 
+
   // /V (verbose), /ETA (estimated time), /R:3 (3 retries), /W:10 (10s wait between retries)
-  const commonArgs = ['/V', '/R:3', '/W:10', '/ETA'];
+  const commonArgs = ['/V', '/ETA', '/R:3', '/W:10'];
   const args = [...baseArgs, ...commonArgs];
 
   const robocopyProcess = spawn('robocopy', args, { shell: true });
