@@ -1,6 +1,8 @@
 'use server';
 
 import { spawn } from 'child_process';
+import fs from 'fs/promises';
+import path from 'path';
 
 // Helper to convert Node.js stream to a Web ReadableStream
 function nodeToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream<Uint8Array> {
@@ -24,19 +26,57 @@ function nodeToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream<Uint
 
 export async function runRobocopy(source: string, destination: string, operation: 'copy' | 'move', scope: 'all' | 'latest'): Promise<ReadableStream<Uint8Array>> {
   
-  const baseArgs = [source, destination];
+  let baseArgs: string[] = [];
+  
+  if (scope === 'latest') {
+    try {
+      const files = await fs.readdir(source);
+      if (files.length === 0) {
+        throw new Error("Source directory is empty.");
+      }
+
+      let latestFile: { name: string; mtime: Date } | null = null;
+
+      for (const file of files) {
+        const fullPath = path.join(source, file);
+        const stats = await fs.stat(fullPath);
+        if (stats.isFile()) {
+          if (!latestFile || stats.mtime > latestFile.mtime) {
+            latestFile = { name: file, mtime: stats.mtime };
+          }
+        }
+      }
+
+      if (!latestFile) {
+        throw new Error("No files found in the source directory.");
+      }
+      
+      // Robocopy args for a single file: source_dir destination_dir file_to_copy
+      baseArgs = [source, destination, latestFile.name];
+
+    } catch (e: any) {
+      // Create a stream that emits the error message and then closes.
+      return new ReadableStream({
+        start(controller) {
+          const errorMessage = `Error finding latest file: ${e.message}`;
+          console.error(errorMessage);
+          controller.enqueue(new TextEncoder().encode(errorMessage));
+          controller.close();
+        }
+      });
+    }
+  } else {
+    baseArgs = [source, destination];
+  }
   
   if (operation === 'move') {
     // /MOVE moves files AND directories (deletes from source after copy)
     baseArgs.push('/MOVE');
   } else {
-    // /E copies subdirectories, including empty ones
-    baseArgs.push('/E');
-  }
-
-  if (scope === 'latest') {
-    // /MAXAGE:1 includes files with a Last Modified Date within the last 1 day.
-    baseArgs.push('/MAXAGE:1');
+    // /E copies subdirectories, including empty ones. Only add if we're not copying a single file.
+    if (scope !== 'latest') {
+      baseArgs.push('/E');
+    }
   }
 
   // /V (verbose), /ETA (estimated time), /R:3 (3 retries), /W:10 (10s wait between retries)

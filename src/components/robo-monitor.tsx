@@ -93,7 +93,10 @@ export function RoboMonitor() {
             const fileMatch = line.trim().match(/(?:\s*\d+\.\d+%\s*)?(\s*)([A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/i);
             if (fileMatch && fileMatch[2]) {
                 const potentialFile = fileMatch[2].trim();
-                setCurrentFile(potentialFile);
+                // Avoid setting directories as the "current file"
+                if (!line.includes('\t*EXTRA Dir')) {
+                   setCurrentFile(potentialFile);
+                }
             }
           }
         });
