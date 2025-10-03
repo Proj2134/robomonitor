@@ -79,9 +79,10 @@ export async function runRobocopy(source: string, destination: string, operation
     baseArgs.push('/E');
   }
 
+  const logFilePath = path.join(destination, "robocopy-log.txt");
 
   // /V (verbose), /ETA (estimated time), /R:3 (3 retries), /W:10 (10s wait between retries)
-  const commonArgs = ['/V', '/ETA', '/R:3', '/W:10'];
+  const commonArgs = ['/V', '/ETA', '/R:3', '/W:10', `/LOG:"${logFilePath}"`];
   const args = [...baseArgs, ...commonArgs];
 
   const robocopyProcess = spawn('robocopy', args, { shell: true });

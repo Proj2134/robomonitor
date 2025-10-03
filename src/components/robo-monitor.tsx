@@ -118,7 +118,7 @@ export function RoboMonitor() {
     }
 
     setProgress(100);
-    setCurrentFile("Completed.");
+    setCurrentFile("Completed. Log file saved to destination.");
     setIsCopying(false);
   };
 
@@ -225,13 +225,13 @@ export function RoboMonitor() {
                 {!isCopying && progress === 100 && (
                     <div className="mt-4 flex items-center text-sm text-accent">
                         <CircleCheck className="h-4 w-4 mr-2 shrink-0" />
-                        <span className="font-semibold">Operation completed successfully.</span>
+                        <span className="font-semibold">{currentFile}</span>
                     </div>
                 )}
             </CardContent>
         </Card>
 
-        <Card className="flex-1 flex flex-col shadow-lg min-h-[400px]">
+        <Card className="flex flex-col shadow-lg h-[400px]">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 font-headline">
               <Terminal />
