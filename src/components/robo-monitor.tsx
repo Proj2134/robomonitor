@@ -89,14 +89,15 @@ export function RoboMonitor() {
               setProgress(percent);
             }
             
-            // Regex to extract the file path from progress lines
-            const fileMatch = line.trim().match(/(?:\s*\d+\.\d+%\s*)?(\s*)([A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/i);
-            if (fileMatch && fileMatch[2]) {
-                const potentialFile = fileMatch[2].trim();
-                // Avoid setting directories as the "current file"
-                if (!line.includes('\t*EXTRA Dir')) {
-                   setCurrentFile(potentialFile);
-                }
+            // More reliable regex to extract file path from various Robocopy lines
+            const fileMatch = line.trim().match(/(?:\s*.*)?\s*([A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/i);
+
+            if (fileMatch && fileMatch[1]) {
+              const potentialPath = fileMatch[1].trim();
+              // Exclude summary lines and other non-file entries
+              if (potentialPath && !line.includes('----------------') && !line.includes('Log File') && !line.match(/^(?:\s*Total\s*|\s*Copied\s*|\s*Skipped\s*|\s*Mismatch\s*|\s*FAILED\s*|\s*Extras\s*)/)) {
+                  setCurrentFile(potentialPath);
+              }
             }
           }
         });
