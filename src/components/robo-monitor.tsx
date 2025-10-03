@@ -9,6 +9,8 @@ import {
   CircleCheck,
   Loader2,
   Move,
+  FileClock,
+  FolderGit2
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -26,6 +28,7 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Separator } from "@/components/ui/separator";
 
 import { runRobocopy } from "@/app/actions";
 
@@ -34,6 +37,7 @@ export function RoboMonitor() {
   const [source, setSource] = useState("C:\\Users\\Default\\Documents");
   const [destination, setDestination] = useState("C:\\Temp\\Backup");
   const [operation, setOperation] = useState<'copy' | 'move'>('copy');
+  const [scope, setScope] = useState<'all' | 'latest'>('all');
   const [isCopying, setIsCopying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -58,10 +62,11 @@ export function RoboMonitor() {
     setCurrentFile(`Starting ${operation} process...`);
     
     try {
-      const stream = await runRobocopy(source, destination, operation);
+      const stream = await runRobocopy(source, destination, operation, scope);
       const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
       
       let lines: string[] = [];
+      let currentLine = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -69,42 +74,26 @@ export function RoboMonitor() {
           break;
         }
 
-        const newLines = value.split(/(\r\n|\n|\r)/);
-        
+        currentLine += value;
+        const newLines = currentLine.split(/(\r\n|\n|\r)/);
+        currentLine = newLines.pop() || ''; // Keep the last, possibly incomplete line
+
         newLines.forEach(line => {
           if (line.trim()) {
-            // Robocopy progress lines overwrite the previous line in the console.
-            // We'll simulate that by replacing the last progress line.
-            const isProgressLine = line.trim().endsWith('%');
+            lines.push(line.trim());
             
-            if (isProgressLine) {
-              // Find the index of the last line that was a progress line
-              const lastProgressIndex = lines.slice().reverse().findIndex(l => l.trim().endsWith('%'));
-              if (lastProgressIndex !== -1) {
-                 // Replace the last progress line
-                 lines[lines.length - 1 - lastProgressIndex] = line.trim();
-              } else {
-                 lines.push(line.trim());
-              }
-            } else {
-              lines.push(line.trim());
-            }
-            
-            // Extract percentage for the progress bar
-            const progressMatch = line.match(/(\d{1,2}(?:\.\d{1,2})?%)/);
+            // Regex to find percentage, now more specific to lines with file paths
+            const progressMatch = line.match(/(\d+\.\d+%)/);
             if (progressMatch && progressMatch[0]) {
-              const percent = parseFloat(progressMatch[0].replace('%','').trim());
+              const percent = parseFloat(progressMatch[0]);
               setProgress(percent);
             }
-
-            // Extract current file path
-            const fileMatch = line.trim().match(/^(?:\s*\d{1,3}\.\d+%\s*)?(?:\s{2,})(.+)/);
-            if(fileMatch && fileMatch[1]){
-                const potentialFile = fileMatch[1].trim();
-                // Filter out non-file lines
-                if (!potentialFile.endsWith('\\') && !potentialFile.startsWith('---') && !/^\d+$/.test(potentialFile) && !potentialFile.match(/^(Log File|Started|Source|Dest|Files|Options|Ended)/) ) {
-                    setCurrentFile(potentialFile);
-                }
+            
+            // Regex to extract the file path from progress lines
+            const fileMatch = line.trim().match(/(?:\s*\d+\.\d+%\s*)?(\s*)([A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/i);
+            if (fileMatch && fileMatch[2]) {
+                const potentialFile = fileMatch[2].trim();
+                setCurrentFile(potentialFile);
             }
           }
         });
@@ -120,7 +109,7 @@ export function RoboMonitor() {
             description: error.message || "An unexpected error occurred during the process.",
         });
         setIsCopying(false);
-        setLogLines(prev => [...prev, error.message || "An unexpected error occurred."]);
+        setLogLines(prev => [...prev, "ERROR: " + (error.message || "An unexpected error occurred.")]);
         return;
     }
 
@@ -141,7 +130,7 @@ export function RoboMonitor() {
             <CardDescription>Configure and initiate a new file transfer job.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="space-y-2">
+            <div className="space-y-4">
                 <Label>Operation Type</Label>
                 <RadioGroup
                     value={operation}
@@ -163,6 +152,30 @@ export function RoboMonitor() {
                     </div>
                 </RadioGroup>
             </div>
+             <Separator />
+             <div className="space-y-4">
+                <Label>Scope</Label>
+                <RadioGroup
+                    value={scope}
+                    onValueChange={(value: 'all' | 'latest') => setScope(value)}
+                    className="flex space-x-4"
+                    disabled={isCopying}
+                >
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="all" id="r-all" />
+                        <Label htmlFor="r-all" className="flex items-center gap-2 cursor-pointer">
+                            <FolderGit2 className="h-4 w-4" /> All Content
+                        </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="latest" id="r-latest" />
+                        <Label htmlFor="r-latest" className="flex items-center gap-2 cursor-pointer">
+                            <FileClock className="h-4 w-4" /> Latest File Only
+                        </Label>
+                    </div>
+                </RadioGroup>
+            </div>
+            <Separator />
             <div className="space-y-2">
               <Label htmlFor="source" className="flex items-center gap-2">
                 <Folder className="h-4 w-4 text-muted-foreground" /> Source Path

@@ -22,7 +22,7 @@ function nodeToWebStream(nodeStream: NodeJS.ReadableStream): ReadableStream<Uint
   });
 }
 
-export async function runRobocopy(source: string, destination: string, operation: 'copy' | 'move'): Promise<ReadableStream<Uint8Array>> {
+export async function runRobocopy(source: string, destination: string, operation: 'copy' | 'move', scope: 'all' | 'latest'): Promise<ReadableStream<Uint8Array>> {
   
   const baseArgs = [source, destination];
   
@@ -32,6 +32,11 @@ export async function runRobocopy(source: string, destination: string, operation
   } else {
     // /E copies subdirectories, including empty ones
     baseArgs.push('/E');
+  }
+
+  if (scope === 'latest') {
+    // /MAXAGE:1 includes files with a Last Modified Date within the last 1 day.
+    baseArgs.push('/MAXAGE:1');
   }
 
   // /V (verbose), /ETA (estimated time), /R:3 (3 retries), /W:10 (10s wait between retries)
@@ -64,18 +69,21 @@ export async function runRobocopy(source: string, destination: string, operation
 
   const stdoutWebStream = nodeToWebStream(robocopyProcess.stdout);
 
+  // We need a way to combine the exit promise with the stream
   const reader = stdoutWebStream.getReader();
   return new ReadableStream({
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
         if (done) {
+          // Once the stream is done, wait for the exit code check to complete
           await exitPromise;
           controller.close();
         } else {
           controller.enqueue(value);
         }
       } catch (error) {
+        // The exit promise might have already rejected, but we catch here too
         controller.error(error);
       }
     },
